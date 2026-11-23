@@ -19,12 +19,6 @@ gi.require_version('XApp', '1.0')
 from gi.repository import Gtk, AccountsService, GLib, Gdk, GdkPixbuf, XApp
 
 
-# Used to detect Debian derivatives (we don't want to show APT features in other distros)
-IS_DEBIAN = os.path.exists("/etc/debian_version")
-
-if IS_DEBIAN:
-    import apt
-
 # i18n
 APP = 'mintlocale'
 LOCALE_DIR = "/usr/share/linuxmint/locale"
@@ -293,11 +287,6 @@ class MintLocale:
         if os.path.exists('/etc/locale.conf'):
             self.locale_path='/etc/locale.conf'
 
-        # Prepare the APT cache
-        if IS_DEBIAN:
-            self.cache = apt.Cache()
-        self.cache_updated = False
-
         # load our glade ui file in
         self.builder = Gtk.Builder()
         self.builder.set_translation_domain("mintlocale")
@@ -329,13 +318,7 @@ class MintLocale:
         self.locale_system_wide_button.connect("clicked", self.button_system_language_clicked)
         size_group.add_widget(self.locale_system_wide_button)
 
-        self.locale_install_button = Gtk.Button()
-        self.locale_install_button.set_label(_("Install / Remove Languages..."))
-        self.locale_install_button.connect("clicked", self.button_install_remove_clicked)
-        size_group.add_widget(self.locale_install_button)
-
         self.system_label = Gtk.Label()
-        self.install_label = Gtk.Label()
 
         page = SettingsPage()
         self.builder.get_object("box1").pack_start(page, True, True, 0)
@@ -360,11 +343,6 @@ class MintLocale:
         self.system_row = SettingsRow(self.system_label, self.locale_system_wide_button)
         self.system_row.set_no_show_all(True)
         language_settings.add_row(self.system_row)
-
-        self.install_row = SettingsRow(self.install_label, self.locale_install_button)
-        self.install_row.set_no_show_all(True)
-        if IS_DEBIAN:
-            language_settings.add_row(self.install_row)
 
         self.pam_environment_path = os.path.join(GLib.get_home_dir(), ".pam_environment")
         self.xsessionrc_path = os.path.join(GLib.get_home_dir(), ".xsessionrc")
@@ -422,7 +400,6 @@ class MintLocale:
 
         self.build_lang_list()
         self.set_system_locale()
-        self.set_num_installed()
 
         self.accountService = AccountsService.UserManager.get_default().get_user(current_user)
         self.accountService.connect('notify::is-loaded', self.accountservice_ready)
@@ -434,7 +411,6 @@ class MintLocale:
                 for user in mem:
                     if current_user == user:
                         self.system_row.set_no_show_all(False)
-                        self.install_row.set_no_show_all(False)
                         language_settings.show_all()
                         break
 
@@ -445,12 +421,6 @@ class MintLocale:
         subprocess.call(['pkexec', 'set-default-locale', self.locale_path, self.current_language, self.current_region, self.current_time])
         self.set_system_locale()
         pass
-
-    def button_install_remove_clicked(self, button):
-        os.system("pkexec add-remove-locales")
-        self.build_lang_list()
-        self.set_system_locale()
-        self.set_num_installed()
 
     # Checks for minority languages that have a flag and returns the corresponding flag_path or the unchanged flag_path
     def set_minority_language_flag_path(self, locale_code, flag_path):
@@ -563,10 +533,6 @@ class MintLocale:
         time_prefix = (_("Time format:"))
         self.system_label.set_markup("<b>%s</b>\n<small>%s <i>%s</i>\n%s <i>%s</i>\n%s <i>%s</i></small>" % (_("System locale"), language_prefix, language_str, region_prefix, region_str, time_prefix, time_str))
 
-    def set_num_installed(self):
-        num_installed = int(subprocess.check_output("localedef --list-archive | wc -l", shell=True))
-        self.install_label.set_markup("<b>%s</b>\n<small>%s</small>" % (_("Language support"), gettext.ngettext("%d language installed", "%d languages installed", num_installed) % num_installed))
-
     def accountservice_ready(self, user, param):
         self.window.show()
 
@@ -598,10 +564,13 @@ class MintLocale:
                     self.languages[split[0]] = split[1]
 
         cur_index = -1  # find the locale :P
-        locales = subprocess.check_output("localedef --list-archive", shell=True)
-        locales = locales.decode('utf-8')
-        if len(locales) == 0:
-            print("Locale archive not found. Regenerate it with 'sudo locale-gen'.")
+        # "locale -a" lists locales from both the locale archive and
+        # /usr/lib/locale/<name>/ directories (Fedora glibc-langpack-*).
+        # "localedef --list-archive" only sees the archive and returns
+        # nothing on Fedora.
+        locales = subprocess.check_output(["locale", "-a"]).decode('utf-8')
+        if len(locales.strip()) == 0:
+            print("No locales found. Install a glibc langpack, e.g. 'sudo dnf install glibc-langpack-en'.")
             sys.exit(1)
 
         built_locales = {}
